@@ -52,9 +52,6 @@ export class UrlResult {
   @Prop()
   contentPreview?: string;
 
-  @Prop({ select: false })
-  content?: string;
-
   @Prop()
   error?: string;
 }

@@ -68,7 +68,7 @@ export class CreateJobResponseDto {
   jobId: string;
 }
 
-export class UrlContentResponseDto extends UrlResultResponseDto {
+export class FullUrlResultResponseDto extends UrlResultResponseDto {
   @ApiPropertyOptional({ description: 'Full content of the fetched URL' })
   content?: string;
 }

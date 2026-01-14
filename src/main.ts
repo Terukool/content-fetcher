@@ -1,14 +1,12 @@
-import 'dotenv/config';
-
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
-import { APP_CONFIG, AppConfig } from './config/app-config';
+import { AppConfig } from './config/config';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
-  const appConfig = app.get<AppConfig>(APP_CONFIG);
+  const appConfig = app.get(AppConfig);
 
   app.useGlobalPipes(
     new ValidationPipe({

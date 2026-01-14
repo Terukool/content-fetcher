@@ -3,12 +3,16 @@ import { JobsRepository } from './jobs.repository';
 import { JobRunnerService } from './job-runner.service';
 import { JobDocument, UrlResult, UrlResultStatus } from './job.schema';
 import { generateUrlHash } from './utils/url-hash.util';
+import { JobContentsService } from '../job-contents/job-contents.service';
+
+type FullUrlResult = UrlResult & { content: string | null };
 
 @Injectable()
 export class JobsService {
   constructor(
-    private readonly jobsRepository: JobsRepository,
-    private readonly jobRunnerService: JobRunnerService,
+    private readonly _repository: JobsRepository,
+    private readonly _jobRunnerService: JobRunnerService,
+    private readonly _jobsContentService: JobContentsService,
   ) {}
 
   async createJob(urls: string[]): Promise<string> {
@@ -27,9 +31,10 @@ export class JobsService {
       }),
     );
 
-    const jobId = await this.jobsRepository.createJob(initialResults);
+    const jobId = await this._repository.createJob(initialResults);
 
-    this.jobRunnerService.run(jobId, urlsWithHashes).catch((error) => {
+    // Run in-process, this can be replaced by a message queue in the future
+    this._jobRunnerService.run(jobId, urlsWithHashes).catch((error) => {
       console.error(`Job ${jobId} runner failed:`, error);
     });
 
@@ -37,7 +42,7 @@ export class JobsService {
   }
 
   async getJob(jobId: string): Promise<JobDocument> {
-    const job = await this.jobsRepository.findJobById(jobId);
+    const job = await this._repository.findJobById(jobId);
 
     if (!job) {
       throw new NotFoundException(`Job ${jobId} not found`);
@@ -46,8 +51,11 @@ export class JobsService {
     return job;
   }
 
-  async getUrlContent(jobId: string, urlHash: string): Promise<UrlResult> {
-    const { jobExists, result } = await this.jobsRepository.findJobUrlContent(
+  async getFullUrlResult(
+    jobId: string,
+    urlHash: string,
+  ): Promise<FullUrlResult> {
+    const { jobExists, result } = await this._repository.findJobUrlResult(
       jobId,
       urlHash,
     );
@@ -62,6 +70,7 @@ export class JobsService {
       );
     }
 
-    return result;
+    const content = await this._jobsContentService.getContent(jobId, urlHash);
+    return { ...result, content };
   }
 }

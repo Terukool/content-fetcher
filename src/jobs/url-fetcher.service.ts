@@ -1,10 +1,18 @@
 import { HttpService } from '@nestjs/axios';
-import { Inject, Injectable } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { firstValueFrom } from 'rxjs';
 import { Readable } from 'stream';
 import type { AxiosRequestConfig, AxiosResponse } from 'axios';
-import { APP_CONFIG, AppConfig } from '../config/app-config';
+import { AppConfig } from '../config/config';
 import { createPreview } from './utils/preview.util';
+import { UrlValidatorService } from './url-validator.service';
+
+interface FetchState {
+  initialUrl: string;
+  currentUrl: string;
+  redirects: string[];
+  visited: Set<string>;
+}
 
 export interface FetchResult {
   success: boolean;
@@ -21,21 +29,17 @@ export interface FetchResult {
 
 @Injectable()
 export class UrlFetcherService {
-  private readonly _blockedHosts: string[];
   constructor(
-    private readonly httpService: HttpService,
-    @Inject(APP_CONFIG) private readonly appConfig: AppConfig,
-  ) {
-    this._blockedHosts = this.appConfig.hostsBlacklist
-      .map((h) => this.normalizeHost(h))
-      .filter(Boolean);
-  }
+    private readonly _httpService: HttpService,
+    private readonly _appConfig: AppConfig,
+    private readonly _urlValidator: UrlValidatorService,
+  ) {}
 
-  async fetch(url: string): Promise<FetchResult> {
-    const state = this.createRedirectState(url);
+  public async fetch(url: string): Promise<FetchResult> {
+    const state = this.createInitialState(url);
 
     try {
-      const firstValidation = this.validateTargetUrl(state.currentUrl);
+      const firstValidation = this._urlValidator.validate(state.currentUrl);
       if (firstValidation.ok === false) {
         return this.errorResult(firstValidation.error, state.redirects);
       }
@@ -56,8 +60,8 @@ export class UrlFetcherService {
         contentType,
         byteLength: declaredLength ?? byteLength,
         truncated,
-        contentPreview: createPreview(content, this.appConfig.previewChars),
-        content: truncated ? undefined : content,
+        contentPreview: createPreview(content, this._appConfig.previewChars),
+        content,
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
@@ -65,12 +69,7 @@ export class UrlFetcherService {
     }
   }
 
-  private createRedirectState(initialUrl: string): {
-    initialUrl: string;
-    currentUrl: string;
-    redirects: string[];
-    visited: Set<string>;
-  } {
+  private createInitialState(initialUrl: string): FetchState {
     return {
       initialUrl,
       currentUrl: initialUrl,
@@ -79,55 +78,28 @@ export class UrlFetcherService {
     };
   }
 
-  private validateTargetUrl(
-    rawUrl: string,
-  ): { ok: true } | { ok: false; error: string } {
-    let parsed: URL;
-    try {
-      parsed = new URL(rawUrl);
-    } catch {
-      return { ok: false, error: `Invalid URL: ${rawUrl}` };
-    }
-
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      return { ok: false, error: `Unsupported protocol: ${parsed.protocol}` };
-    }
-
-    const hostname = this.normalizeHost(parsed.hostname);
-    if (this.isHostBlacklisted(hostname)) {
-      return { ok: false, error: `Blocked host: ${hostname}` };
-    }
-
-    return { ok: true };
-  }
-
-  private normalizeHost(hostname: string): string {
-    return hostname.trim().toLowerCase().replace(/\.$/, '');
-  }
-
-  private isHostBlacklisted(hostname: string): boolean {
-    return this._blockedHosts.some((entry) => {
-      return hostname === entry || hostname.endsWith(`.${entry}`);
-    });
-  }
-
-  private async followRedirects(state: {
-    currentUrl: string;
-    redirects: string[];
-    visited: Set<string>;
-  }): Promise<AxiosResponse<Readable>> {
+  private async followRedirects(
+    mutableState: FetchState,
+  ): Promise<AxiosResponse<Readable>> {
     let hops = 0;
 
     while (true) {
-      const response = await this.requestOnce(state.currentUrl);
+      const currentValidation = this._urlValidator.validate(
+        mutableState.currentUrl,
+      );
+      if (currentValidation.ok === false) {
+        throw new Error(currentValidation.error);
+      }
+
+      const response = await this.requestOnce(mutableState.currentUrl);
 
       if (!this.isRedirectStatus(response.status)) {
         return response;
       }
 
-      if (hops >= this.appConfig.maxRedirects) {
+      if (hops >= this._appConfig.maxRedirects) {
         throw new Error(
-          `Max redirects (${this.appConfig.maxRedirects}) exceeded`,
+          `Max redirects (${this._appConfig.maxRedirects}) exceeded`,
         );
       }
 
@@ -136,20 +108,20 @@ export class UrlFetcherService {
         throw new Error('Redirect without Location header');
       }
 
-      const nextUrl = this.resolveUrl(state.currentUrl, location);
-      const validation = this.validateTargetUrl(nextUrl);
+      const nextUrl = this.resolveUrl(mutableState.currentUrl, location);
+      const validation = this._urlValidator.validate(nextUrl);
       if (validation.ok === false) {
         throw new Error(validation.error);
       }
 
-      state.redirects.push(state.currentUrl);
+      mutableState.redirects.push(mutableState.currentUrl);
 
-      if (state.visited.has(nextUrl)) {
+      if (mutableState.visited.has(nextUrl)) {
         throw new Error('Redirect loop detected');
       }
 
-      state.visited.add(nextUrl);
-      state.currentUrl = nextUrl;
+      mutableState.visited.add(nextUrl);
+      mutableState.currentUrl = nextUrl;
       hops += 1;
     }
   }
@@ -167,19 +139,28 @@ export class UrlFetcherService {
       url,
       method: 'GET',
       responseType: 'stream',
-      timeout: this.appConfig.timeoutMs,
+      timeout: this._appConfig.timeoutMs,
       maxRedirects: 0,
       // allow us to inspect 3xx without throwing
       validateStatus: () => true,
     };
 
     return await firstValueFrom(
-      this.httpService.request<Readable>(requestConfig),
+      this._httpService.request<Readable>(requestConfig),
     );
   }
 
   private isRedirectStatus(status: number): boolean {
-    return status >= 300 && status < 400;
+    return [301, 302, 303, 307, 308].includes(status);
+  }
+
+  private parseContentLength(
+    response: AxiosResponse<unknown>,
+  ): number | undefined {
+    const raw = this.getHeader(response, 'content-length');
+    if (!raw) return undefined;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : undefined;
   }
 
   private getHeader(
@@ -192,15 +173,6 @@ export class UrlFetcherService {
     return undefined;
   }
 
-  private parseContentLength(
-    response: AxiosResponse<unknown>,
-  ): number | undefined {
-    const raw = this.getHeader(response, 'content-length');
-    if (!raw) return undefined;
-    const parsed = Number(raw);
-    return Number.isFinite(parsed) ? parsed : undefined;
-  }
-
   private async readStreamWithLimit(
     stream: Readable,
   ): Promise<Pick<FetchResult, 'content' | 'byteLength' | 'truncated'>> {
@@ -211,11 +183,11 @@ export class UrlFetcherService {
     for await (const chunk of stream) {
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
 
-      if (totalBytes + buffer.length > this.appConfig.maxBytes) {
-        const remaining = this.appConfig.maxBytes - totalBytes;
-        if (remaining > 0) {
-          chunks.push(buffer.subarray(0, remaining));
-          totalBytes += remaining;
+      if (totalBytes + buffer.length > this._appConfig.maxBytes) {
+        const remainingBytes = this._appConfig.maxBytes - totalBytes;
+        if (remainingBytes > 0) {
+          chunks.push(buffer.subarray(0, remainingBytes));
+          totalBytes += remainingBytes;
         }
         truncated = true;
         break;

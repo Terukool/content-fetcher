@@ -6,7 +6,7 @@ A NestJS service that fetches content from HTTP URLs in batches. Submit a list o
 
 ### Prerequisites
 
-- Node.js 18+
+- Node.js 22+
 - pnpm
 - Docker (for MongoDB)
 
@@ -21,7 +21,7 @@ docker compose up -d
 Create a `.env` file (loaded automatically at startup via `dotenv`):
 
 ```bash
-PORT=5000
+PORT=3000
 MONGO_URI=mongodb://localhost:27017/content-fetcher
 ```
 
@@ -52,7 +52,6 @@ Visit `http://localhost:<PORT>/api` for interactive API docs.
 - **SSRF mitigation** via `hostsBlacklist` (blocks `localhost` variants by default)
 - **Swagger API documentation**
 - **Input validation** with `class-validator`
-- **RxJS-based job runner** with buffered Mongo updates
 
 ## API Endpoints
 
@@ -97,7 +96,7 @@ Response:
 }
 ```
 
-### Get Full Content for a URL
+### Get Full Result for a URL
 
 ```bash
 curl http://localhost:3000/jobs/<jobId>/urls/<urlHash>
@@ -121,7 +120,7 @@ You can override values using environment variables (optionally via `.env`):
 | `mongoBatchSize` | 10 | Batch size for Mongo updates (JobRunner) |
 | `timeoutMs` | 10000 | Per-URL timeout |
 | `maxRedirects` | 5 | Maximum redirect hops |
-| `maxBytes` | 1MB | Maximum response body size |
+| `maxBytes` | `10485760` (10MB) | Maximum response body size in bytes (numeric value only, e.g., `10485760` for 10MB) |
 | `previewChars` | 500 | Content preview length |
 | `hostsBlacklist` | localhost variants | Blocks hosts like `localhost`, `127.0.0.1`, `::1` |
 
@@ -138,30 +137,9 @@ pnpm run test --runInBand
 pnpm run test:cov
 ```
 
-## Project Structure
-
-```
-src/
-├── config/                # ConfigModule + AppConfig token
-├── main.ts                # Application bootstrap
-├── app.module.ts          # Root module
-└── jobs/
-    ├── jobs.module.ts     # Jobs feature module
-    ├── jobs.controller.ts # HTTP endpoints
-    ├── jobs.service.ts    # Business logic orchestration
-    ├── job-runner.service.ts   # Async job execution
-    ├── url-fetcher.service.ts  # HTTP fetching with redirects
-    ├── jobs.repository.ts      # MongoDB data access
-    ├── job.schema.ts           # Mongoose schema
-    ├── dto/                    # Request/Response DTOs
-    └── utils/                  # Pure utility functions
-```
-
 ## Architecture
 
 - **Controller layer**: HTTP request/response handling only
 - **Service layer**: Business logic and orchestration
 - **Repository layer**: Database access abstraction
 - **Fetcher service**: HTTP client with redirect/timeout handling
-
-Follows SOLID principles with clean separation of concerns.

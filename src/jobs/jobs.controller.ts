@@ -14,16 +14,16 @@ import { CreateJobDto } from './dto/create-job.dto';
 import {
   CreateJobResponseDto,
   JobResponseDto,
-  UrlContentResponseDto,
+  FullUrlResultResponseDto,
 } from './dto/job-response.dto';
-import { AppConfig, InjectAppConfig } from '../config/app-config';
+import { AppConfig } from '../config/config';
 
 @ApiTags('jobs')
 @Controller('jobs')
 export class JobsController {
   constructor(
-    private readonly jobsService: JobsService,
-    @InjectAppConfig() private readonly appConfig: AppConfig,
+    private readonly _jobsService: JobsService,
+    private readonly _config: AppConfig,
   ) {}
 
   @Post()
@@ -40,13 +40,13 @@ export class JobsController {
   ): Promise<CreateJobResponseDto> {
     const uniqueUrls = [...new Set(createJobDto.urls)];
 
-    if (uniqueUrls.length > this.appConfig.maxUrlsPerJob) {
+    if (uniqueUrls.length > this._config.maxUrlsPerJob) {
       throw new BadRequestException(
-        `Number of URLs exceeds the maximum allowed per job: ${this.appConfig.maxUrlsPerJob}`,
+        `Number of URLs exceeds the maximum allowed per job: ${this._config.maxUrlsPerJob}`,
       );
     }
 
-    const jobId = await this.jobsService.createJob(uniqueUrls);
+    const jobId = await this._jobsService.createJob(uniqueUrls);
     return { jobId };
   }
 
@@ -60,7 +60,7 @@ export class JobsController {
   })
   @ApiResponse({ status: 404, description: 'Job not found' })
   public async getJob(@Param('jobId') jobId: string): Promise<JobResponseDto> {
-    const job = await this.jobsService.getJob(jobId);
+    const job = await this._jobsService.getJob(jobId);
 
     return {
       jobId: job._id.toString(),
@@ -78,13 +78,13 @@ export class JobsController {
   @ApiResponse({
     status: 200,
     description: 'URL content',
-    type: UrlContentResponseDto,
+    type: FullUrlResultResponseDto,
   })
   @ApiResponse({ status: 404, description: 'Job or URL not found' })
-  public async getUrlContent(
+  public async getFullUrlResult(
     @Param('jobId') jobId: string,
     @Param('urlHash') urlHash: string,
-  ): Promise<UrlContentResponseDto> {
-    return this.jobsService.getUrlContent(jobId, urlHash);
+  ): Promise<FullUrlResultResponseDto> {
+    return this._jobsService.getFullUrlResult(jobId, urlHash);
   }
 }

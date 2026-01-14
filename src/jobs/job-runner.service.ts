@@ -1,5 +1,5 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
-import { from, lastValueFrom, of } from 'rxjs';
+import { Injectable, Logger } from '@nestjs/common';
+import { from, lastValueFrom, Observable, of } from 'rxjs';
 import {
   bufferTime,
   catchError,
@@ -9,34 +9,49 @@ import {
   mergeMap,
   reduce,
 } from 'rxjs/operators';
-import { JobsRepository } from './jobs.repository';
+import { JobsRepository, JobUpdatePayload } from './jobs.repository';
 import { FetchResult, UrlFetcherService } from './url-fetcher.service';
 import { JobStatus, UrlResult, UrlResultStatus } from './job.schema';
-import { UrlWithHash } from './models/url.model';
-import { APP_CONFIG, AppConfig } from '../config/app-config';
+import { AppConfig } from '../config/config';
+import { JobContentsService } from '../job-contents/job-contents.service';
+
+type RunnerUpdatePayload = JobUpdatePayload & { content: string | null };
+type UrlWithHash = {
+  url: string;
+  urlHash: string;
+};
 
 @Injectable()
 export class JobRunnerService {
-  private readonly logger = new Logger(JobRunnerService.name);
+  private readonly _logger = new Logger(JobRunnerService.name);
+
+  private readonly _concurrency: number;
+  private readonly _batchTimeMs: number;
+  private readonly _batchSize: number;
 
   constructor(
-    private readonly jobsRepository: JobsRepository,
-    private readonly urlFetcherService: UrlFetcherService,
-    @Inject(APP_CONFIG) private readonly appConfig: AppConfig,
-  ) {}
+    private readonly _jobRepository: JobsRepository,
+    private readonly _urlFetcherService: UrlFetcherService,
+    private readonly _jobsContentService: JobContentsService,
+    appConfig: AppConfig,
+  ) {
+    this._concurrency = appConfig.concurrentFetchRequests;
+    this._batchTimeMs = appConfig.mongoBatchTimeMs;
+    this._batchSize = appConfig.mongoBatchSize;
+  }
 
   public async run(
     jobId: string,
     urlsWithHashes: UrlWithHash[],
   ): Promise<void> {
-    await this.jobsRepository.setJobStatus(jobId, JobStatus.RUNNING);
+    await this._jobRepository.setJobStatus(jobId, JobStatus.RUNNING);
 
     try {
       await this.processUrlsConcurrently(jobId, urlsWithHashes);
-      await this.jobsRepository.setJobStatus(jobId, JobStatus.COMPLETED);
+      await this._jobRepository.setJobStatus(jobId, JobStatus.COMPLETED);
     } catch (error) {
-      this.logger.error(`Job ${jobId} failed unexpectedly:`, error);
-      await this.jobsRepository.setJobStatus(jobId, JobStatus.FAILED);
+      this._logger.error(`Job ${jobId} failed unexpectedly:`, error);
+      await this._jobRepository.setJobStatus(jobId, JobStatus.FAILED);
     }
   }
 
@@ -44,36 +59,47 @@ export class JobRunnerService {
     jobId: string,
     urlsWithHashes: UrlWithHash[],
   ): Promise<void> {
-    const concurrency = this.appConfig.concurrency;
-    const batchTimeMs = this.appConfig.mongoBatchTimeMs;
-    const batchSize = this.appConfig.mongoBatchSize;
-
-    const updates$ = from(urlsWithHashes).pipe(
-      mergeMap(
-        ({ url, urlHash }) =>
-          from(this.urlFetcherService.fetch(url)).pipe(
-            map((fetchResult) => ({
-              urlHash,
-              patch: this.buildPatch(fetchResult),
-            })),
-            catchError((err) =>
-              of({
-                urlHash,
-                patch: this.buildErrorPatch(err),
-              }),
-            ),
-          ),
-        concurrency,
-      ),
-      bufferTime(batchTimeMs, undefined, batchSize),
+    const processUrls$ = from(urlsWithHashes).pipe(
+      mergeMap((item) => this.fetchOne$(item), this._concurrency),
+      bufferTime(this._batchTimeMs, undefined, this._batchSize),
       filter((batch) => batch.length > 0),
-      concatMap((batch) =>
-        from(this.jobsRepository.bulkUpdateResults(jobId, batch)),
-      ),
+      concatMap((batch) => this.flushBatch$(jobId, batch)),
       reduce((count) => count + 1, 0),
     );
 
-    await lastValueFrom(updates$);
+    await lastValueFrom(processUrls$);
+  }
+
+  private fetchOne$({
+    url,
+    urlHash,
+  }: UrlWithHash): Observable<RunnerUpdatePayload> {
+    return from(this._urlFetcherService.fetch(url)).pipe(
+      map((fetchResult) => ({
+        urlHash,
+        patch: this.buildPatch(fetchResult),
+        content: !fetchResult.content ? null : fetchResult.content,
+      })),
+      catchError((err) =>
+        of({
+          urlHash,
+          patch: this.buildErrorPatch(err),
+          content: null,
+        }),
+      ),
+    );
+  }
+
+  private flushBatch$(
+    jobId: string,
+    batch: RunnerUpdatePayload[],
+  ): Observable<void> {
+    return from(
+      Promise.all([
+        this._jobRepository.bulkUpdateResults(jobId, batch),
+        this._jobsContentService.upsertMany(jobId, batch),
+      ]),
+    ).pipe(map(() => undefined));
   }
 
   private buildPatch(fetchResult: Partial<FetchResult>): Partial<UrlResult> {
@@ -88,7 +114,6 @@ export class JobRunnerService {
       byteLength: fetchResult.byteLength,
       truncated: fetchResult.truncated,
       contentPreview: fetchResult.contentPreview,
-      content: fetchResult.content,
       error: fetchResult.error,
     };
   }

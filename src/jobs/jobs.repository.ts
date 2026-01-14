@@ -3,15 +3,20 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Job, JobDocument, JobStatus, UrlResult } from './job.schema';
 
+export interface JobUpdatePayload {
+  urlHash: string;
+  patch: Partial<UrlResult>;
+}
+
 @Injectable()
 export class JobsRepository {
   constructor(
-    @InjectModel(Job.name) private readonly jobModel: Model<JobDocument>,
+    @InjectModel(Job.name) private readonly _model: Model<JobDocument>,
   ) {}
 
   async bulkUpdateResults(
     jobId: string,
-    updates: Array<{ urlHash: string; patch: Partial<UrlResult> }>,
+    updates: JobUpdatePayload[],
   ): Promise<void> {
     if (updates.length === 0) return;
 
@@ -33,11 +38,11 @@ export class JobsRepository {
       };
     });
 
-    await this.jobModel.bulkWrite(operations, { ordered: false });
+    await this._model.bulkWrite(operations, { ordered: false });
   }
 
   async createJob(initialState: UrlResult[]): Promise<string> {
-    const job = await this.jobModel.create({
+    const job = await this._model.create({
       status: JobStatus.PENDING,
       results: initialState,
     });
@@ -46,48 +51,29 @@ export class JobsRepository {
   }
 
   async setJobStatus(jobId: string, status: JobStatus): Promise<void> {
-    await this.jobModel.updateOne(
-      { _id: new Types.ObjectId(jobId) },
-      { status },
-    );
+    await this._model.updateOne({ _id: new Types.ObjectId(jobId) }, { status });
   }
 
   async findJobById(jobId: string): Promise<JobDocument | null> {
-    return this.jobModel.findById(new Types.ObjectId(jobId)).exec();
+    return this._model.findById(new Types.ObjectId(jobId)).exec();
   }
 
-  async findJobUrlContent(
+  async findJobUrlResult(
     jobId: string,
     urlHash: string,
   ): Promise<{ jobExists: boolean; result: UrlResult | null }> {
     const jobObjectId = new Types.ObjectId(jobId);
-
-    const [doc] = await this.jobModel
-      .aggregate<{ result?: UrlResult }>([
-        { $match: { _id: jobObjectId } },
-        {
-          $project: {
-            result: {
-              $arrayElemAt: [
-                {
-                  $filter: {
-                    input: '$results',
-                    as: 'r',
-                    cond: { $eq: ['$$r.urlHash', urlHash] },
-                  },
-                },
-                0,
-              ],
-            },
-          },
-        },
-      ])
+    const job = await this._model
+      .findById(jobObjectId, { results: 1 })
+      .lean()
       .exec();
 
-    if (!doc) {
+    if (!job) {
       return { jobExists: false, result: null };
     }
 
-    return { jobExists: true, result: doc.result ?? null };
+    const result =
+      job.results?.find((r: UrlResult) => r.urlHash === urlHash) ?? null;
+    return { jobExists: true, result };
   }
 }
