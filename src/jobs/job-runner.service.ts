@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { from, lastValueFrom, Observable, of } from 'rxjs';
+import { throwError } from 'rxjs';
 import {
   bufferTime,
   catchError,
@@ -44,11 +45,15 @@ export class JobRunnerService {
     jobId: string,
     urlsWithHashes: UrlWithHash[],
   ): Promise<void> {
+    this._logger.log(
+      `Job ${jobId} starting: urls=${urlsWithHashes.length} concurrency=${this._concurrency} batchTimeMs=${this._batchTimeMs} batchSize=${this._batchSize}`,
+    );
     await this._jobRepository.setJobStatus(jobId, JobStatus.RUNNING);
 
     try {
       await this.processUrlsConcurrently(jobId, urlsWithHashes);
       await this._jobRepository.setJobStatus(jobId, JobStatus.COMPLETED);
+      this._logger.log(`Job ${jobId} completed`);
     } catch (error) {
       this._logger.error(`Job ${jobId} failed unexpectedly:`, error);
       await this._jobRepository.setJobStatus(jobId, JobStatus.FAILED);
@@ -94,12 +99,38 @@ export class JobRunnerService {
     jobId: string,
     batch: RunnerUpdatePayload[],
   ): Observable<void> {
+    const contentUpdates = batch
+      .filter((item): item is RunnerUpdatePayload & { content: string } => {
+        return item.content !== null && typeof item.content === 'string';
+      })
+      .map(({ urlHash, content }) => ({ urlHash, content }));
+
+    const successCount = batch.filter(
+      (b) => b.patch.status === UrlResultStatus.SUCCESS,
+    ).length;
+    const errorCount = batch.filter(
+      (b) => b.patch.status === UrlResultStatus.ERROR,
+    ).length;
+
+    this._logger.debug(
+      `Job ${jobId} flushing batch: results=${batch.length} success=${successCount} error=${errorCount} contents=${contentUpdates.length}`,
+    );
+
     return from(
       Promise.all([
         this._jobRepository.bulkUpdateResults(jobId, batch),
-        this._jobsContentService.upsertMany(jobId, batch),
+        this._jobsContentService.upsertMany(jobId, contentUpdates),
       ]),
-    ).pipe(map(() => undefined));
+    ).pipe(
+      map(() => undefined),
+      catchError((error) => {
+        this._logger.error(
+          `Job ${jobId} batch flush failed (results=${batch.length}, contents=${contentUpdates.length})`,
+          error,
+        );
+        return throwError(() => error);
+      }),
+    );
   }
 
   private buildPatch(fetchResult: Partial<FetchResult>): Partial<UrlResult> {

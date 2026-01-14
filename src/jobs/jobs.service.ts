@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { JobsRepository } from './jobs.repository';
 import { JobRunnerService } from './job-runner.service';
 import { JobDocument, UrlResult, UrlResultStatus } from './job.schema';
@@ -9,6 +9,8 @@ type FullUrlResult = UrlResult & { content: string | null };
 
 @Injectable()
 export class JobsService {
+  private readonly _logger = new Logger(JobsService.name);
+
   constructor(
     private readonly _repository: JobsRepository,
     private readonly _jobRunnerService: JobRunnerService,
@@ -16,6 +18,7 @@ export class JobsService {
   ) {}
 
   async createJob(urls: string[]): Promise<string> {
+    this._logger.log(`Creating job for ${urls.length} URLs`);
     const urlsWithHashes = urls.map((url) => ({
       url,
       urlHash: generateUrlHash(url),
@@ -32,10 +35,11 @@ export class JobsService {
     );
 
     const jobId = await this._repository.createJob(initialResults);
+    this._logger.log(`Created job ${jobId} with ${urlsWithHashes.length} URLs`);
 
     // Run in-process, this can be replaced by a message queue in the future
     this._jobRunnerService.run(jobId, urlsWithHashes).catch((error) => {
-      console.error(`Job ${jobId} runner failed:`, error);
+      this._logger.error(`Job ${jobId} runner failed`, error);
     });
 
     return jobId;

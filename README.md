@@ -143,3 +143,20 @@ pnpm run test:cov
 - **Service layer**: Business logic and orchestration
 - **Repository layer**: Database access abstraction
 - **Fetcher service**: HTTP client with redirect/timeout handling
+
+## Design Decisions & Trade-offs
+
+* **In-Memory Processing:** * **Decision:** I implemented a custom in-memory job runner with configurable concurrency instead of using a persistent queue like BullMQ/Redis.
+    * **Trade-off:** In a production environment, I would swap this for a persistent queue to handle process crashes and retries.
+
+* **Split Collections (Jobs vs. Results):**
+    * **Decision:** Job metadata and Fetch Results are stored in separate MongoDB collections (linked by `jobId`).
+    * **Reasoning:** This is because of MongoDB's **16MB BSON document limit**. I used MongoDB for the storage here to avoid over enginerring for the small scope of the project, and enforced a 10MB storage limit. This can be swapped out for blob storage in production.
+
+* **Streaming & Truncation:**
+    * **Decision:** The fetcher uses Node.js streams to read the response body, enforcing a hard byte limit (default 10MB).
+    * **Reasoning:** This prevents out of memory vulnerabilities. If a payload exceeds the limit, it is truncated (preserving headers/metadata) rather than failed, ensuring the user still gets partial utility.
+
+* **Manual Redirect Handling:**
+    * **Decision:** Redirects are followed manually rather than relying on the HTTP client's auto-follow.
+    * **Reasoning:** This allows the `hostsBlacklist` security check to run on every hop of the chain, preventing SSRF attacks via open redirects to internal/blocked hosts. This logic can be expanded upon in url-validator for stricter future protection.

@@ -1,5 +1,5 @@
 import { HttpService } from '@nestjs/axios';
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { firstValueFrom } from 'rxjs';
 import { Readable } from 'stream';
 import type { AxiosRequestConfig, AxiosResponse } from 'axios';
@@ -29,6 +29,8 @@ export interface FetchResult {
 
 @Injectable()
 export class UrlFetcherService {
+  private readonly _logger = new Logger(UrlFetcherService.name);
+
   constructor(
     private readonly _httpService: HttpService,
     private readonly _appConfig: AppConfig,
@@ -39,8 +41,10 @@ export class UrlFetcherService {
     const state = this.createInitialState(url);
 
     try {
+      this._logger.debug(`Fetch start: url=${state.currentUrl}`);
       const firstValidation = this._urlValidator.validate(state.currentUrl);
       if (firstValidation.ok === false) {
+        this._logger.warn(`Fetch blocked: ${firstValidation.error}`);
         return this.errorResult(firstValidation.error, state.redirects);
       }
 
@@ -51,6 +55,9 @@ export class UrlFetcherService {
         finalResponse.data,
       );
 
+      this._logger.debug(
+        `Fetch success: status=${finalResponse.status} bytes=${declaredLength ?? byteLength} truncated=${truncated} redirects=${state.redirects.length}`,
+      );
       return {
         success: true,
         httpStatus: finalResponse.status,
@@ -65,6 +72,7 @@ export class UrlFetcherService {
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
+      this._logger.warn(`Fetch failed: ${message}`);
       return this.errorResult(message, state.redirects);
     }
   }
@@ -109,6 +117,9 @@ export class UrlFetcherService {
       }
 
       const nextUrl = this.resolveUrl(mutableState.currentUrl, location);
+      this._logger.debug(
+        `Redirect: status=${response.status} from=${mutableState.currentUrl} to=${nextUrl}`,
+      );
       const validation = this._urlValidator.validate(nextUrl);
       if (validation.ok === false) {
         throw new Error(validation.error);

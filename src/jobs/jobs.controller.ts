@@ -1,5 +1,6 @@
 import {
   Controller,
+  Logger,
   Post,
   Get,
   Param,
@@ -21,6 +22,8 @@ import { AppConfig } from '../config/config';
 @ApiTags('jobs')
 @Controller('jobs')
 export class JobsController {
+  private readonly _logger = new Logger(JobsController.name);
+
   constructor(
     private readonly _jobsService: JobsService,
     private readonly _config: AppConfig,
@@ -47,6 +50,7 @@ export class JobsController {
     }
 
     const jobId = await this._jobsService.createJob(uniqueUrls);
+    this._logger.log(`Created job ${jobId} (urls=${uniqueUrls.length})`);
     return { jobId };
   }
 
