@@ -1,8 +1,12 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
+import { Test, TestingModule } from '@nestjs/testing';
 import { UrlValidatorService } from '../url-validator.service';
 import { AppConfig } from '../../config/config';
 
 describe('UrlValidatorService', () => {
+  let module: TestingModule;
+  let service: UrlValidatorService;
+
   const CONFIG: AppConfig = {
     port: 3000,
     mongoUri: 'mongodb://localhost:27017/test',
@@ -17,43 +21,45 @@ describe('UrlValidatorService', () => {
     hostsBlacklist: ['localhost'],
   };
 
-  const createService = () => new UrlValidatorService(CONFIG);
+  beforeEach(async () => {
+    module = await Test.createTestingModule({
+      providers: [
+        UrlValidatorService,
+        {
+          provide: AppConfig,
+          useValue: CONFIG,
+        },
+      ],
+    }).compile();
+
+    service = module.get(UrlValidatorService);
+  });
 
   it('blocks blacklisted hosts', () => {
-    const service = createService();
-
     const result = service.validate('http://localhost:3000');
 
     expect(result.ok).toBe(false);
   });
 
   it('blocks blacklisted subdomains', () => {
-    const service = createService();
-
     const result = service.validate('http://foo.localhost:3000');
 
     expect(result.ok).toBe(false);
   });
 
   it('rejects invalid urls', () => {
-    const service = createService();
-
     const result = service.validate('not-a-url');
 
     expect(result.ok).toBe(false);
   });
 
   it('rejects non-http protocols', () => {
-    const service = createService();
-
     const result = service.validate('ftp://example.com');
 
     expect(result.ok).toBe(false);
   });
 
   it('allows http/https to non-blacklisted hosts', () => {
-    const service = createService();
-
     const result = service.validate('https://example.com');
 
     expect(result.ok).toBe(true);

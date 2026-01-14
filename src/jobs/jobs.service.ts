@@ -17,7 +17,7 @@ export class JobsService {
     private readonly _jobsContentService: JobContentsService,
   ) {}
 
-  async createJob(urls: string[]): Promise<string> {
+  public async createJob(urls: string[]): Promise<string> {
     this._logger.log(`Creating job for ${urls.length} URLs`);
     const urlsWithHashes = urls.map((url) => ({
       url,
@@ -45,7 +45,7 @@ export class JobsService {
     return jobId;
   }
 
-  async getJob(jobId: string): Promise<JobDocument> {
+  public async getJob(jobId: string): Promise<JobDocument> {
     const job = await this._repository.findJobById(jobId);
 
     if (!job) {
@@ -55,7 +55,7 @@ export class JobsService {
     return job;
   }
 
-  async getFullUrlResult(
+  public async getFullUrlResult(
     jobId: string,
     urlHash: string,
   ): Promise<FullUrlResult> {
@@ -75,6 +75,7 @@ export class JobsService {
     }
 
     const content = await this._jobsContentService.getContent(jobId, urlHash);
+
     return { ...result, content };
   }
 }

@@ -35,6 +35,7 @@ export class JobContentsRepository {
       .findOne({ jobId: jobObjectId, urlHash }, { content: 1 })
       .lean()
       .exec();
+
     return doc?.content ?? null;
   }
 }
